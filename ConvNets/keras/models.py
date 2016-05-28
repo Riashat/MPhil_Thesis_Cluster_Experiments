@@ -626,7 +626,7 @@ class Sequential(Model, containers.Sequential):
         # Returns
             A numpy array of predictions.
         '''
-        print('Hello')
+
         print('Test Time Dropoout')
         X = standardize_X(X)
         return self._predict_loop(self._predict, X, batch_size, verbose)[0]
