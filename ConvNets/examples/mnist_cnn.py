@@ -71,8 +71,8 @@ model.fit(X_train, Y_train, batch_size=batch_size, nb_epoch=nb_epoch,
 
 score= model.predict(X_test,batch_size=batch_size, verbose=1)
 score2= model.predict(X_test,batch_size=batch_size, verbose=1)
-score3= model.predict(X_test,batch_size=batch_size, verbose=1)
-score4= model.predict(X_test,batch_size=batch_size, verbose=1)
+score3= model.predict(X_test,batch_size=batch_size, verbose=0)
+score4= model.predict(X_test,batch_size=batch_size, verbose=0)
 
 
 
