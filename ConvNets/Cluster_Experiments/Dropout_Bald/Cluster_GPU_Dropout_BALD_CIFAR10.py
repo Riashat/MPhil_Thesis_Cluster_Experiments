@@ -1,5 +1,5 @@
 from __future__ import print_function
-from keras.datasets import mnist
+from keras.datasets import cifar10
 from keras.preprocessing.image import ImageDataGenerator
 from keras.models import Sequential
 from keras.layers.core import Dense, Dropout, Activation, Flatten
@@ -14,24 +14,23 @@ import random
 import scipy.io
 import matplotlib.pyplot as plt
 from keras.regularizers import l2, activity_l2
-from scipy.stats import mode
 
-Experiments = 3
+
+Experiments = 2
 
 batch_size = 128
 nb_classes = 10
 
+
 #use a large number of epochs
-nb_epoch = 50
+nb_epoch = 30
+
 
 # input image dimensions
-img_rows, img_cols = 28, 28
-# number of convolutional filters to use
-nb_filters = 32
-# size of pooling area for max pooling
-nb_pool = 2
-# convolution kernel size
-nb_conv = 3
+img_rows, img_cols = 32, 32
+
+# the CIFAR10 images are RGB
+img_channels = 3
 
 score=0
 all_accuracy = 0
@@ -39,33 +38,30 @@ acquisition_iterations = 300
 
 #use a large number of dropout iterations
 dropout_iterations = 100
+
 Queries = 10
 
 
+
 Experiments_All_Accuracy = np.zeros(shape=(acquisition_iterations+1))
+
 
 for e in range(Experiments):
 
 	print('Experiment Number ', e)
 
-
-	# the data, shuffled and split between tran and test sets
-	(X_train_All, y_train_All), (X_test, y_test) = mnist.load_data()
-
-	X_train_All = X_train_All.reshape(X_train_All.shape[0], 1, img_rows, img_cols)
-	X_test = X_test.reshape(X_test.shape[0], 1, img_rows, img_cols)
-
+	# the data, shuffled and split between train and test sets
+	(X_train_All, y_train_All), (X_test, y_test) = cifar10.load_data()
 
 	#after 50 iterations with 10 pools - we have 500 pooled points - use validation set outside of this
-	X_valid = X_train_All[2000:2150, :, :, :]
-	y_valid = y_train_All[2000:2150]
+	X_valid = X_train_All[4000:4150, 0:3, 0:32, 0:32]
+	y_valid = y_train_All[4000:4150, 0]
 
+	X_train = X_train_All[0:200, 0:3, 0:32, 0:32]
+	y_train = y_train_All[0:200, 0]
 
-	X_train = X_train_All[0:200, :, :, :]
-	y_train = y_train_All[0:200]
-
-	X_Pool = X_train_All[5000:15000, :, :, :]
-	y_Pool = y_train_All[5000:15000]
+	X_Pool = X_train_All[5000:15000, 0:3, 0:32, 0:32]
+	y_Pool = y_train_All[5000:15000, 0]
 
 
 	print('X_train shape:', X_train.shape)
@@ -80,7 +76,7 @@ for e in range(Experiments):
 	X_valid /= 255
 	X_Pool /= 255
 	X_test /= 255
-	
+
 	Y_test = np_utils.to_categorical(y_test, nb_classes)
 	Y_valid = np_utils.to_categorical(y_valid, nb_classes)
 	Y_Pool = np_utils.to_categorical(y_Pool, nb_classes)
@@ -94,25 +90,30 @@ for e in range(Experiments):
 
 	print('Training Model Without Acquisitions in Experiment', e)
 
-
 	model = Sequential()
-	model.add(Convolution2D(nb_filters, nb_conv, nb_conv, border_mode='valid', input_shape=(1, img_rows, img_cols)))
+	model.add(Convolution2D(32, 3, 3, border_mode='same', input_shape=(img_channels, img_rows, img_cols)))
+	model.add(Activation('relu'))   #using relu activation function
+	model.add(Convolution2D(32, 3, 3))
 	model.add(Activation('relu'))
-	model.add(Convolution2D(nb_filters, nb_conv, nb_conv))
-	model.add(Activation('relu'))
-	model.add(MaxPooling2D(pool_size=(nb_pool, nb_pool)))
-	model.add(Dropout(0.25))
-	
-	model.add(Convolution2D(nb_filters*2, nb_conv, nb_conv, border_mode='valid', input_shape=(1, img_rows, img_cols)))
-	model.add(Activation('relu'))
-	model.add(Convolution2D(nb_filters*2, nb_conv, nb_conv))
-	model.add(Activation('relu'))
-	model.add(MaxPooling2D(pool_size=(nb_pool, nb_pool)))
+	model.add(MaxPooling2D(pool_size=(2, 2)))
 	model.add(Dropout(0.25))
 
+	model.add(Convolution2D(64, 3, 3, border_mode='same'))
+	model.add(Activation('relu'))
+	model.add(Convolution2D(64, 3, 3))
+	model.add(Activation('relu'))
+	model.add(MaxPooling2D(pool_size=(2, 2)))
+	model.add(Dropout(0.25))
+
+	model.add(Convolution2D(128, 3, 3, border_mode='same'))
+	model.add(Activation('relu'))
+	model.add(Convolution2D(128, 3, 3))
+	model.add(Activation('relu'))
+	model.add(MaxPooling2D(pool_size=(2, 2)))
+	model.add(Dropout(0.25))
 
 	model.add(Flatten())
-	model.add(Dense(128))
+	model.add(Dense(512))
 	model.add(Activation('relu'))
 	model.add(Dropout(0.5))
 	model.add(Dense(nb_classes))
@@ -137,49 +138,73 @@ for e in range(Experiments):
 	print('Starting Active Learning in Experiment ', e)
 
 
+
+
+
 	for i in range(acquisition_iterations):
+		
 		print('POOLING ITERATION', i)
 
-		All_Dropout_Classes = np.zeros(shape=(X_Pool.shape[0],1))
 		print('Use trained model for test time dropout')
+
+		score_All = np.zeros(shape=(X_Pool.shape[0], nb_classes))
+		All_Entropy_Dropout = np.zeros(shape=X_Pool.shape[0])
+
 
 		for d in range(dropout_iterations):
 			print ('Dropout Iteration', d)
-			dropout_classes = model.predict_classes(X_Pool,batch_size=batch_size, verbose=1)
-			dropout_classes = np.array([dropout_classes]).T
-			#np.save('/Users/Riashat/Documents/Cambridge_THESIS/Code/Experiments/keras/active_learning/Acquisition_Functions/BCNN_Maximal_Uncertainty/Variation_Ratio/Dropout_Scores/'+'Dropout_Score_'+str(d)+'.npy',dropout_classes)
-			All_Dropout_Classes = np.append(All_Dropout_Classes, dropout_classes, axis=1)
+			dropout_score = model.predict(X_Pool,batch_size=batch_size, verbose=1)
+			# np.save('/Users/Riashat/Documents/Cambridge_THESIS/Code/Experiments/keras/active_learning/Acquisition_Functions/Bayesian_Active_Learning/GPU/BALD/Dropout_Scores/'+ 'CIFAR10_Experiment_' + str(e)  + '_Dropout_Score_'+str(d)+'.npy',dropout_score)
+			#computing G_X
+			score_All = score_All + dropout_score
 
-		Variation = np.zeros(shape=(X_Pool.shape[0]))
+			#computing F_X
+			dropout_score_log = np.log2(dropout_score)
+			Entropy_Compute = - np.multiply(dropout_score, dropout_score_log)
+			Entropy_Per_Dropout = np.sum(Entropy_Compute, axis=1)
 
-		for t in range(X_Pool.shape[0]):
-			L = np.array([0])
-			for d_iter in range(dropout_iterations):
-				L = np.append(L, All_Dropout_Classes[t, d_iter+1])						
-			Predicted_Class, Mode = mode(L[1:])
-			v = np.array(  [1 - Mode/float(dropout_iterations)])
-			Variation[t] = v
+			All_Entropy_Dropout = All_Entropy_Dropout + Entropy_Per_Dropout 
 
 
-		a_1d = Variation.flatten()
+		Avg_Pi = np.divide(score_All, dropout_iterations)
+		Log_Avg_Pi = np.log2(Avg_Pi)
+		Entropy_Avg_Pi = - np.multiply(Avg_Pi, Log_Avg_Pi)
+		Entropy_Average_Pi = np.sum(Entropy_Avg_Pi, axis=1)
+
+		G_X = Entropy_Average_Pi
+
+		Average_Entropy = np.divide(All_Entropy_Dropout, dropout_iterations)
+
+		F_X = Average_Entropy
+
+		U_X = G_X - F_X
+
+		# THIS FINDS THE MINIMUM INDEX 
+		# a_1d = U_X.flatten()
+		# x_pool_index = a_1d.argsort()[-Queries:]
+
+		a_1d = U_X.flatten()
 		x_pool_index = a_1d.argsort()[-Queries:][::-1]
+
 
 		#store all the pooled images indexes
 		x_pool_All = np.append(x_pool_All, x_pool_index)
 
 		#saving pooled images
-		for im in range(4):
-			Image = X_Pool[x_pool_index[im], :, :, :]
-			img = Image.reshape((28,28))
-			sp.misc.imsave(''+'Pool_Iter'+str(i)+'_Image_'+str(im)+'.jpg', img)
+
+		# #save only 3 images per iteration
+		# for im in range(x_pool_index[0:2].shape[0]):
+		# 	Image = X_Pool[x_pool_index[im], :, :, :]
+		# 	img = Image.reshape((28,28))
+			#sp.misc.imsave('/home/ri258/Documents/Project/Active-Learning-Deep-Convolutional-Neural-Networks/ConvNets/Cluster_Experiments/Dropout_Bald/Pooled_Images/' + 'CIFAR10_Experiment_' + str(e) + 'Pool_Iter'+str(i)+'_Image_'+str(im)+'.jpg', img)
+
+		Pooled_X = X_Pool[x_pool_index, 0:3,0:32,0:32]
+		Pooled_Y = y_Pool[x_pool_index]	
 
 
-		Pooled_X = X_Pool[x_pool_index, 0:1, 0:28, 0:28]
-		Pooled_Y = y_Pool[x_pool_index]
-
-		delete_std = np.delete(Variation, (x_pool_index), axis=0)
 		delete_Pool_X = np.delete(X_Pool, (x_pool_index), axis=0)
 		delete_Pool_Y = np.delete(y_Pool, (x_pool_index), axis=0)
+
 
 		print('Acquised Points added to training set')
 
@@ -188,30 +213,33 @@ for e in range(Experiments):
 
 
 
-		print('Train Model with pooled points')
-
-
 		# convert class vectors to binary class matrices
 		Y_train = np_utils.to_categorical(y_train, nb_classes)
 
 		model = Sequential()
-		model.add(Convolution2D(nb_filters, nb_conv, nb_conv, border_mode='valid', input_shape=(1, img_rows, img_cols)))
+		model.add(Convolution2D(32, 3, 3, border_mode='same', input_shape=(img_channels, img_rows, img_cols)))
+		model.add(Activation('relu'))   #using relu activation function
+		model.add(Convolution2D(32, 3, 3))
 		model.add(Activation('relu'))
-		model.add(Convolution2D(nb_filters, nb_conv, nb_conv))
-		model.add(Activation('relu'))
-		model.add(MaxPooling2D(pool_size=(nb_pool, nb_pool)))
+		model.add(MaxPooling2D(pool_size=(2, 2)))
 		model.add(Dropout(0.25))
 
-		model.add(Convolution2D(nb_filters*2, nb_conv, nb_conv, border_mode='valid', input_shape=(1, img_rows, img_cols)))
+		model.add(Convolution2D(64, 3, 3, border_mode='same'))
 		model.add(Activation('relu'))
-		model.add(Convolution2D(nb_filters*2, nb_conv, nb_conv))
+		model.add(Convolution2D(64, 3, 3))
 		model.add(Activation('relu'))
-		model.add(MaxPooling2D(pool_size=(nb_pool, nb_pool)))
+		model.add(MaxPooling2D(pool_size=(2, 2)))
 		model.add(Dropout(0.25))
 
+		model.add(Convolution2D(128, 3, 3, border_mode='same'))
+		model.add(Activation('relu'))
+		model.add(Convolution2D(128, 3, 3))
+		model.add(Activation('relu'))
+		model.add(MaxPooling2D(pool_size=(2, 2)))
+		model.add(Dropout(0.25))
 
 		model.add(Flatten())
-		model.add(Dense(128))
+		model.add(Dense(512))
 		model.add(Activation('relu'))
 		model.add(Dropout(0.5))
 		model.add(Dense(nb_classes))
@@ -225,10 +253,10 @@ for e in range(Experiments):
 		Valid_Loss = np.asarray(Train_Result_Optimizer.get('val_loss'))
 		Valid_Loss = np.asarray([Valid_Loss]).T
 
+
 		#Accumulate the training and validation/test loss after every pooling iteration - for plotting
 		Pool_Valid_Loss = np.append(Pool_Valid_Loss, Valid_Loss, axis=1)
 		Pool_Train_Loss = np.append(Pool_Train_Loss, Train_Loss, axis=1)	
-
 
 		print('Evaluate Model Test Accuracy with pooled points')
 
@@ -237,7 +265,6 @@ for e in range(Experiments):
 		print('Test accuracy:', acc)
 		all_accuracy = np.append(all_accuracy, acc)
 
-
 		print('Use this trained model with pooled points for Dropout again')
 
 
@@ -245,21 +272,18 @@ for e in range(Experiments):
 	Experiments_All_Accuracy = Experiments_All_Accuracy + all_accuracy
 
 
+
 	print('Saving Results Per Experiment')
-	np.save(''+'All_Train_Loss_'+ 'Experiment_' + str(e) + '.npy', Pool_Train_Loss)
-	np.save(''+ 'All_Valid_Loss_'+ 'Experiment_' + str(e) + '.npy', Pool_Valid_Loss)
-	np.save(''+'All_Pooled_Image_Index_'+ 'Experiment_' + str(e) + '.npy', x_pool_All)
-	np.save(''+ 'All_Accuracy_Results_'+ 'Experiment_' + str(e) + '.npy', all_accuracy)
+	np.save('/home/ri258/Documents/Project/Active-Learning-Deep-Convolutional-Neural-Networks/ConvNets/Cluster_Experiments/Dropout_Bald/Results/'+'CIFAR10_All_Train_Loss_'+ 'Experiment_' + str(e) + '.npy', Pool_Train_Loss)
+	np.save('/home/ri258/Documents/Project/Active-Learning-Deep-Convolutional-Neural-Networks/ConvNets/Cluster_Experiments/Dropout_Bald/Results/'+ 'CIFAR10_All_Valid_Loss_'+ 'Experiment_' + str(e) + '.npy', Pool_Valid_Loss)
+	np.save('/home/ri258/Documents/Project/Active-Learning-Deep-Convolutional-Neural-Networks/ConvNets/Cluster_Experiments/Dropout_Bald/Results/'+'CFAR10_All_Pooled_Image_Index_'+ 'Experiment_' + str(e) + '.npy', x_pool_All)
+	np.save('/home/ri258/Documents/Project/Active-Learning-Deep-Convolutional-Neural-Networks/ConvNets/Cluster_Experiments/Dropout_Bald/Results/'+ 'CIFAR10_All_Accuracy_Results_'+ 'Experiment_' + str(e) + '.npy', all_accuracy)
 
 print('Saving Average Accuracy Over Experiments')
 
 Average_Accuracy = np.divide(Experiments_All_Accuracy, Experiments)
 
-np.save(''+'Average_Accuracy'+'.npy', Average_Accuracy)
-
-
-
-
+np.save('/home/ri258/Documents/Project/Active-Learning-Deep-Convolutional-Neural-Networks/ConvNets/Cluster_Experiments/Dropout_Bald/Results/'+'CIFAR10_Average_Accuracy'+'.npy', Average_Accuracy)
 
 
 
